@@ -176,4 +176,4 @@ export interface CreditUsageLog {
   created_at: string;
 }
 
-export type ActiveTab = "chat" | "draft" | "documents" | "knowledge" | "billing" | "admin" | "architecture";
+export type ActiveTab = "chat" | "draft" | "documents" | "knowledge" | "calculators" | "billing" | "admin" | "architecture";

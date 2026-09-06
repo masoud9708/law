@@ -21,7 +21,9 @@ import {
   Paperclip,
   X,
   UploadCloud,
-  FileUp
+  FileUp,
+  Download,
+  Printer
 } from "lucide-react";
 
 interface ChatViewProps {
@@ -220,6 +222,42 @@ export const ChatView: React.FC<ChatViewProps> = ({ onCreditDeducted }) => {
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
+  const handleExportChat = () => {
+    if (messages.length === 0) return;
+    const title = currentConv?.title || "مشاوره_حقوقی";
+    let content = `گزارش مشاوره و پژوهش حقوقی هوش مصنوعی دادگستری\n`;
+    content += `موضوع: ${title}\n`;
+    content += `تاریخ خروجی: ${new Date().toLocaleDateString("fa-IR")}\n`;
+    content += `------------------------------------------------------------\n\n`;
+
+    messages.forEach((msg) => {
+      const role = msg.role === "user" ? "کاربر (شما)" : `دستیار هوشمند (${msg.model || "Gemini"})`;
+      content += `[${role}] - ${msg.created_at || ""}\n`;
+      content += `${msg.content}\n`;
+      if (msg.citations && msg.citations.length > 0) {
+        content += `\nمستندات و مواد قانونی استنادشده:\n`;
+        msg.citations.forEach((c: any) => {
+          content += `  • ${c.citation_text}\n`;
+        });
+      }
+      content += `\n------------------------------------------------------------\n\n`;
+    });
+
+    const blob = new Blob(["\ufeff" + content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title.replace(/[\/\\?%*:|"<>]/g, "-")}-${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handlePrintChat = () => {
+    window.print();
+  };
+
   const currentConv = conversations.find(c => c.id === activeConvId);
 
   return (
@@ -291,7 +329,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ onCreditDeducted }) => {
             <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
             <span>RAG Active: <strong className="text-slate-200">۵۰+ سرفصل جامع</strong></span>
           </span>
-          <span className="font-mono text-[10px] text-amber-400">Gemini 3.7</span>
+          <span className="font-mono text-[10px] text-amber-400">Gemini 3.8</span>
         </div>
       </aside>
 
@@ -307,7 +345,27 @@ export const ChatView: React.FC<ChatViewProps> = ({ onCreditDeducted }) => {
           </div>
 
           <div className="flex items-center gap-2 text-xs text-slate-400">
-            <span className="hidden sm:inline">موتور تحلیل:</span>
+            {messages.length > 0 && (
+              <div className="flex items-center gap-1.5 ml-2 pl-2 border-l border-slate-800">
+                <button
+                  onClick={handleExportChat}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
+                  title="دانلود متن کامل گفتگو و استنادات"
+                >
+                  <Download className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="hidden sm:inline">خروجی متن</span>
+                </button>
+                <button
+                  onClick={handlePrintChat}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors cursor-pointer"
+                  title="چاپ گفتگو"
+                >
+                  <Printer className="w-3.5 h-3.5 text-slate-300" />
+                  <span className="hidden sm:inline">چاپ</span>
+                </button>
+              </div>
+            )}
+            <span className="hidden md:inline">موتور تحلیل:</span>
             <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-amber-300 font-mono text-[11px] border border-slate-800 font-bold">
               LLM Gateway + Hybrid Qdrant
             </span>
@@ -398,9 +456,15 @@ export const ChatView: React.FC<ChatViewProps> = ({ onCreditDeducted }) => {
 
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => handleCopyText(msg.id, msg.content)}
+                              onClick={() => {
+                                let fullText = msg.content;
+                                if (msg.citations && msg.citations.length > 0) {
+                                  fullText += "\n\nمستندات قانونی:\n" + msg.citations.map((c: any) => `• ${c.citation_text}`).join("\n");
+                                }
+                                handleCopyText(msg.id, fullText);
+                              }}
                               className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-                              title="کپی متن پاسخ"
+                              title="کپی متن پاسخ همراه با مستندات قانونی"
                             >
                               {copiedMsgId === msg.id ? (
                                 <Check className="w-3.5 h-3.5 text-emerald-400" />

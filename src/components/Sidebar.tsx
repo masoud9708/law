@@ -5,6 +5,7 @@ import {
   FilePenLine,
   FileSearch,
   BookOpen,
+  Calculator,
   CreditCard,
   Settings,
   Layers,
@@ -31,7 +32,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       label: "مشاوره و چت حقوقی",
       sublabel: "Legal Chat & RAG",
       icon: MessageSquareText,
-      badge: "Gemini 3.7"
+      badge: "Gemini 3.8"
     },
     {
       id: "draft",
@@ -39,6 +40,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       sublabel: "Legal Drafting Engine",
       icon: FilePenLine,
       badge: "فرمت رسمی"
+    },
+    {
+      id: "calculators",
+      label: "محاسبات قضایی و مواعد",
+      sublabel: "Legal & Delay Calculators",
+      icon: Calculator,
+      badge: "ماده ۵۲۲"
     },
     {
       id: "documents",

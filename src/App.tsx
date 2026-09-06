@@ -7,6 +7,7 @@ import { ChatView } from "./components/chat/ChatView";
 import { DraftingView } from "./components/drafting/DraftingView";
 import { DocumentsView } from "./components/documents/DocumentsView";
 import { KnowledgeBaseView } from "./components/knowledge/KnowledgeBaseView";
+import { CalculatorsView } from "./components/calculators/CalculatorsView";
 import { BillingView } from "./components/billing/BillingView";
 import { AdminView } from "./components/admin/AdminView";
 import { ArchitectureView } from "./components/architecture/ArchitectureView";
@@ -74,6 +75,7 @@ export function App() {
           {activeTab === "draft" && <DraftingView onCreditDeducted={loadCurrentUser} />}
           {activeTab === "documents" && <DocumentsView onCreditDeducted={loadCurrentUser} />}
           {activeTab === "knowledge" && <KnowledgeBaseView />}
+          {activeTab === "calculators" && <CalculatorsView />}
           {activeTab === "billing" && <BillingView onPlanPurchased={loadCurrentUser} />}
           {activeTab === "admin" && <AdminView />}
           {activeTab === "architecture" && <ArchitectureView />}
