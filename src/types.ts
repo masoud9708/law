@@ -22,6 +22,15 @@ export type LegalCategory =
   | "املاک و اراضی و ثبت"
   | "مالیات و گمرک";
 
+export interface LegalSourceAnalysis {
+  summary: string;
+  holding: string;
+  reasoning: string;
+  litigation_application: string;
+  related_laws: string[];
+  practical_points: string[];
+}
+
 export interface LegalSource {
   id: string;
   source_type: SourceType;
@@ -35,6 +44,9 @@ export interface LegalSource {
   keywords: string[];
   metadata: Record<string, any>;
   created_at: string;
+  year?: number;
+  law_type?: string;
+  analysis?: LegalSourceAnalysis;
 }
 
 export interface User {

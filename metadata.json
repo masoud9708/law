@@ -2,5 +2,7 @@
   "name": "پلتفرم هوش مصنوعی حقوقی ایران (Legal AI)",
   "description": "پلتفرم جامع هوش مصنوعی حقوقی، تحلیل اسناد و پرونده، دستیار تنظیم دادخواست و لوایح، سامانه بازیابی هوشمند قوانین (RAG) و اعتبارسنجی استنادات با موتور پردازش فارسی",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

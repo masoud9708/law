@@ -12,6 +12,60 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        function isExtensionError(str) {
+          if (!str || typeof str !== 'string') return false;
+          var s = str.toLowerCase();
+          return (
+            s.indexOf('metamask') !== -1 ||
+            s.indexOf('failed to connect to metamask') !== -1 ||
+            s.indexOf('ethereum') !== -1 ||
+            s.indexOf('chrome-extension://') !== -1 ||
+            s.indexOf('moz-extension://') !== -1 ||
+            s.indexOf('evm') !== -1
+          );
+        }
+
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event.reason ? (event.reason.message || String(event.reason)) : '';
+          if (isExtensionError(reason)) {
+            event.preventDefault();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+            return false;
+          }
+        }, true);
+
+        window.addEventListener('error', function(event) {
+          var msg = event.message || (event.error ? event.error.message : '');
+          if (isExtensionError(msg)) {
+            event.preventDefault();
+            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+            return false;
+          }
+        }, true);
+
+        var origConsoleError = console.error;
+        console.error = function() {
+          var firstArg = arguments[0];
+          var str = typeof firstArg === 'string' ? firstArg : (firstArg && firstArg.message ? firstArg.message : '');
+          if (isExtensionError(str)) {
+            return;
+          }
+          origConsoleError.apply(console, arguments);
+        };
+
+        var origConsoleWarn = console.warn;
+        console.warn = function() {
+          var firstArg = arguments[0];
+          var str = typeof firstArg === 'string' ? firstArg : (firstArg && firstArg.message ? firstArg.message : '');
+          if (isExtensionError(str)) {
+            return;
+          }
+          origConsoleWarn.apply(console, arguments);
+        };
+      })();
+    </script>
   </head>
   <body class="bg-[#090D16] text-slate-100 antialiased font-sans selection:bg-amber-900/50 selection:text-amber-200">
     <div id="root"></div>

@@ -17,6 +17,8 @@ export interface LegalSource {
   keywords: string[];
   metadata: Record<string, any>;
   created_at: string;
+  year?: number;
+  law_type?: string;
 }
 
 export interface User {
@@ -1095,11 +1097,16 @@ import { ARA_JRI_LEGAL_SOURCES } from "./araJriSources";
 
 export { ARA_JRI_LEGAL_SOURCES };
 
+const _seenInitialIds = new Set<string>();
 export const ALL_INITIAL_LEGAL_SOURCES: LegalSource[] = [
   ...ARA_JRI_LEGAL_SOURCES,
   ...LEGAL_SOURCES,
   ...EXPANDED_LEGAL_SOURCES
-];
+].filter(src => {
+  if (!src.id || _seenInitialIds.has(src.id)) return false;
+  _seenInitialIds.add(src.id);
+  return true;
+});
 
 // Current State
 export class MemoryStore {
@@ -1254,7 +1261,7 @@ export class MemoryStore {
 ۱. اعلام بطلان بیع موضوع مبایعه‌نامه شماره ... مورخ ... به جهت مستحق‌للغیر درآمدن مبیع
 ۲. استرداد اصل ثمن پرداختی به انضمام غرامات ناشی از کاهش شدید ارزش ثمن بر مبنای ارزش روز مبیع با جلب نظر کارشناس رسمی دادگستری مستنداً به رأی وحدت رویه ۸۱۱ و ۷۳۳ دیوان عالی کشور
 ۳. مطالبه کلیه خسارات دادرسی و حق‌الوکاله وکیل`,
-      model: "gemini-3.7-flash (Legal Router)",
+      model: "gemini-3.8-flash (Legal Router)",
       status: "completed",
       input_tokens: 320,
       output_tokens: 480,

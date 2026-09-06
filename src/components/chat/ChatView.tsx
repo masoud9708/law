@@ -420,9 +420,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ onCreditDeducted }) => {
                         {msg.citations && msg.citations.length > 0 && (
                           <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
                             <div className="flex flex-wrap gap-2">
-                              {msg.citations.map((cit) => (
+                              {msg.citations.map((cit, cIdx) => (
                                 <button
-                                  key={cit.id}
+                                  key={`${cit.id}-${cIdx}`}
                                   onClick={() => setSelectedCitation(cit)}
                                   className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-[11px] text-amber-300 rounded-lg border border-amber-500/30 flex items-center gap-1.5 transition-colors cursor-pointer"
                                 >

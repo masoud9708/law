@@ -208,7 +208,17 @@ export const api = {
   },
 
   // Legal Search & Knowledge Base
-  async searchLegal(query: string, category?: string, sourceType?: string): Promise<{
+  async searchLegal(
+    query: string,
+    category?: string,
+    sourceType?: string,
+    options?: {
+      lawType?: string;
+      year?: number | string;
+      yearFrom?: number | string;
+      yearTo?: number | string;
+    }
+  ): Promise<{
     query: string;
     normalized: string;
     totalCount: number;
@@ -216,12 +226,50 @@ export const api = {
   }> {
     return request("/api/v1/search/legal", {
       method: "POST",
-      body: JSON.stringify({ query, category, sourceType })
+      body: JSON.stringify({
+        query,
+        category,
+        sourceType,
+        lawType: options?.lawType,
+        year: options?.year,
+        yearFrom: options?.yearFrom,
+        yearTo: options?.yearTo
+      })
     }, { query, normalized: query, totalCount: 0, sources: [] });
   },
 
-  async getLegalSources(): Promise<{ sources: LegalSource[] }> {
-    return request("/api/v1/legal/sources", { method: "GET" }, { sources: [] });
+  async getLegalSources(params?: {
+    ara_page?: string | number;
+    category?: string;
+    source_type?: string;
+    law_type?: string;
+    year?: number | string;
+    year_from?: number | string;
+    year_to?: number | string;
+    search?: string;
+    source_origin?: string;
+  }): Promise<{
+    sources: LegalSource[];
+    total?: number;
+    totalAraSources?: number;
+    totalJudgesSources?: number;
+    totalJudges100To1000?: number;
+    totalJudges1000To10000?: number;
+    totalUnitySources?: number;
+    totalPages?: number;
+  }> {
+    const query = new URLSearchParams();
+    if (params?.ara_page !== undefined) query.set("ara_page", String(params.ara_page));
+    if (params?.category) query.set("category", params.category);
+    if (params?.source_type) query.set("source_type", params.source_type);
+    if (params?.law_type) query.set("law_type", params.law_type);
+    if (params?.year !== undefined && params?.year !== "all") query.set("year", String(params.year));
+    if (params?.year_from !== undefined) query.set("year_from", String(params.year_from));
+    if (params?.year_to !== undefined) query.set("year_to", String(params.year_to));
+    if (params?.search) query.set("search", params.search);
+    if (params?.source_origin) query.set("source_origin", params.source_origin);
+    const qs = query.toString() ? `?${query.toString()}` : "";
+    return request(`/api/v1/legal/sources${qs}`, { method: "GET" }, { sources: [], total: 0, totalAraSources: 0, totalJudgesSources: 0, totalUnitySources: 0, totalPages: 71 });
   },
 
   async ingestLegalSource(source: Partial<LegalSource>): Promise<{ source: LegalSource }> {
@@ -231,17 +279,56 @@ export const api = {
     });
   },
 
-  async syncAraJri(url?: string): Promise<{
+  async analyzeLegalSource(id: string, force?: boolean): Promise<{ success: boolean; analysis: any; source: LegalSource; cached: boolean }> {
+    return request(`/api/v1/legal/sources/${id}/analyze`, {
+      method: "POST",
+      body: JSON.stringify({ force })
+    });
+  },
+
+  async syncAraJri(options?: {
+    url?: string;
+    page?: number;
+    startPage?: number;
+    endPage?: number;
+    live?: boolean;
+  } | string): Promise<{
     success: boolean;
     message: string;
     url: string;
     addedCount: number;
     totalAraSources: number;
+    pagesSynced?: number[];
     sources: LegalSource[];
   }> {
+    const body = typeof options === "string" ? { url: options } : (options || {});
     return request("/api/v1/legal/sync-ara-jri", {
       method: "POST",
-      body: JSON.stringify({ url })
+      body: JSON.stringify(body)
+    });
+  },
+
+  async getAraStats(): Promise<{
+    success: boolean;
+    totalSources: number;
+    totalUnitySources?: number;
+    totalJudgesSources?: number;
+    totalJudges100To1000?: number;
+    totalJudges1000To10000?: number;
+    totalPages: number;
+    minPage: number;
+    maxPage: number;
+    pageDistribution: Record<number, number>;
+    samplePages: number[];
+  }> {
+    return request("/api/v1/legal/ara-stats", { method: "GET" }, {
+      success: true,
+      totalSources: 0,
+      totalPages: 71,
+      minPage: 1,
+      maxPage: 71,
+      pageDistribution: {},
+      samplePages: [1, 5, 71]
     });
   },
 
@@ -364,7 +451,7 @@ export const api = {
         minioObjectStorage: "AVAILABLE"
       },
       orchestrator: {
-        activeModel: "gemini-3.7-flash (Cloud) + Local Iranian Legal Reranker",
+        activeModel: "gemini-3.8-flash (Cloud) + Local Iranian Legal Reranker",
         avgCitationConfidence: "96.4%",
         persianNormalizationSuccessRate: "100%",
         queryRoutingDistribution: {

@@ -333,7 +333,7 @@ export const EXPANDED_LEGAL_SOURCES: LegalSource[] = [
   // ۱۳. آرای تکمیلی وحدت رویه دیوان عالی کشور
   // =========================================================================
   {
-    id: "src-vr-805",
+    id: "src-vr-805-detailed",
     source_type: "UNITY_JUDGMENT",
     title: "رأی وحدت رویه شماره ۸۰۵ هیأت عمومی دیوان عالی کشور (اعتبار وجه التزام روزانه)",
     document_number: "۸۰۵",

@@ -2,10 +2,40 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { db, Conversation, Message, DocumentRecord, Transaction, Subscription } from "./server/db";
-import { ARA_JRI_LEGAL_SOURCES } from "./server/araJriSources";
+import { ARA_JRI_LEGAL_SOURCES, crawlAraJriPage, loadAllJudgesData, loadJudges100To1000Data, loadJudges1000To10000Data } from "./server/araJriSources";
 import { normalizePersian } from "./server/persianNormalizer";
+
+// بارگذاری و ادغام خودکار کلیه مستندات و آرای سامانه ملی قضایی در پایگاه دانش RAG
+function syncAllSourcesIntoDb() {
+  const existingMap = new Map<string, number>(db.legalSources.map((s, idx) => [s.id, idx]));
+  for (const src of ARA_JRI_LEGAL_SOURCES) {
+    if (existingMap.has(src.id)) {
+      const idx = existingMap.get(src.id)!;
+      db.legalSources[idx] = { ...db.legalSources[idx], ...src };
+    } else {
+      db.legalSources.push(src);
+      existingMap.set(src.id, db.legalSources.length - 1);
+    }
+  }
+
+  // اضافه کردن کلیه دادنامه‌های استخراج‌شده شعب (۱۰۰ تا ۱۰۰۰۰)
+  const judges = loadAllJudgesData();
+  for (const src of judges) {
+    if (existingMap.has(src.id)) {
+      const idx = existingMap.get(src.id)!;
+      db.legalSources[idx] = { ...db.legalSources[idx], ...src };
+    } else {
+      db.legalSources.push(src);
+      existingMap.set(src.id, db.legalSources.length - 1);
+    }
+  }
+}
+
+syncAllSourcesIntoDb();
+console.log(`[Legal AI DB] Total legal sources loaded into RAG: ${db.legalSources.length} (including ${ARA_JRI_LEGAL_SOURCES.length} sources from ara.jri.ac.ir)`);
+
 import { hybridRetrieveLegalSources, verifyCitations } from "./server/ragEngine";
-import { generateLegalResponse, generateDocumentAnalysis, enhanceOCRText } from "./server/gemini";
+import { generateLegalResponse, generateDocumentAnalysis, enhanceOCRText, generatePrecedentAnalysis } from "./server/gemini";
 import { deductCredits, getUserCredits } from "./server/creditEngine";
 
 const app = express();
@@ -24,6 +54,11 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// Health check endpoint
+app.get(["/api/health", "/healthz", "/api/v1/health"], (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
 
 // Helper: Current simulated user (Default to admin user for demo, supports session switching)
 let currentUserId = "usr-admin-1";
@@ -560,15 +595,65 @@ app.post("/api/v1/documents/:id/analyze", async (req, res) => {
 // 5. LEGAL KNOWLEDGE BASE & SEARCH (API Contract)
 // ==========================================
 
+// توابع استخراج هوشمند سال تصویب و نوع قانون برای فیلتر دقیق
+export function extractSourceYear(s: { date?: string; document_number?: string; title?: string; metadata?: any }): number | undefined {
+  if (s.metadata?.year && typeof s.metadata.year === "number") {
+    return s.metadata.year;
+  }
+  const toEn = (str: any) => String(str || "").replace(/[۰-۹]/g, d => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)));
+  
+  const dateEn = toEn(s.date);
+  const mDate = dateEn.match(/\b(1[34][0-9]{2})\b/);
+  if (mDate) return parseInt(mDate[1], 10);
+
+  const docEn = toEn(s.document_number);
+  const mDoc = docEn.match(/(?:مصوب|سال)\s*(1[34][0-9]{2})/);
+  if (mDoc) return parseInt(mDoc[1], 10);
+  const mDdn = docEn.match(/\b(9[0-9])0997/);
+  if (mDdn) return 1300 + parseInt(mDdn[1], 10);
+
+  const titleEn = toEn(s.title);
+  const mTitle = titleEn.match(/(?:مصوب|سال)\s*(1[34][0-9]{2})/);
+  if (mTitle) return parseInt(mTitle[1], 10);
+  const mTitleDdn = titleEn.match(/\b(9[0-9])0997/);
+  if (mTitleDdn) return 1300 + parseInt(mTitleDdn[1], 10);
+
+  const mGeneral = (dateEn + " " + docEn + " " + titleEn).match(/\b(1[34][0-9]{2})\b/);
+  if (mGeneral) return parseInt(mGeneral[1], 10);
+
+  return undefined;
+}
+
+export function classifyLawType(s: { source_type: string; title: string; category?: string; authority?: string; metadata?: any }): string {
+  const t = s.title || "";
+  if (t.includes("قانون اساسی")) return "CONSTITUTION";
+  if (s.source_type === "UNITY_JUDGMENT" || t.includes("وحدت رویه")) return "UNITY_JUDGMENT";
+  if (s.metadata?.judge_id !== undefined || s.source_type === "JUDGMENT" || t.includes("دادنامه")) return "COURT_JUDGMENT";
+  if (s.source_type === "ADMIN_COURT_JUDGMENT" || s.authority?.includes("دیوان عدالت") || s.category?.includes("دیوان عدالت")) return "ADMIN_COURT_JUDGMENT";
+  if (s.source_type === "ADVISORY_OPINION" || t.includes("نظریه مشورتی")) return "ADVISORY_OPINION";
+  if (s.source_type === "CIRCULAR" || t.includes("آیین‌نامه") || t.includes("بخشنامه") || t.includes("تصویب‌نامه")) return "CIRCULAR";
+  if (s.source_type === "LAW") {
+    if (t.includes("قانون مدنی") || t.includes("مجازات") || t.includes("تجارت") || t.includes("آیین دادرسی") || t.includes("قانون کار")) {
+      return "GENERAL_LAW";
+    }
+    return "SPECIAL_LAW";
+  }
+  return s.source_type || "OTHER";
+}
+
 // POST /api/v1/search/legal
 app.post("/api/v1/search/legal", (req, res) => {
-  const { query, category, sourceType } = req.body;
+  const { query, category, sourceType, lawType, year, yearFrom, yearTo } = req.body;
   if (!query) {
     return res.status(400).json({ error: "عبارت جستجو نمی‌تواند خالی باشد." });
   }
 
-  const retrieval = hybridRetrieveLegalSources(query, 15);
-  let results = retrieval.sources;
+  const retrieval = hybridRetrieveLegalSources(query, 60);
+  let results = retrieval.sources.map(s => ({
+    ...s,
+    year: extractSourceYear(s),
+    law_type: classifyLawType(s)
+  }));
 
   if (category && category !== "all") {
     results = results.filter(s => s.category === category);
@@ -576,19 +661,171 @@ app.post("/api/v1/search/legal", (req, res) => {
   if (sourceType && sourceType !== "all") {
     results = results.filter(s => s.source_type === sourceType);
   }
+  if (lawType && lawType !== "all") {
+    results = results.filter(s => s.law_type === lawType || s.source_type === lawType);
+  }
+  if (year && year !== "all") {
+    const targetYear = Number(year);
+    if (!isNaN(targetYear)) {
+      results = results.filter(s => s.year === targetYear);
+    }
+  }
+  if (yearFrom) {
+    const yFrom = Number(yearFrom);
+    if (!isNaN(yFrom)) {
+      results = results.filter(s => s.year !== undefined && s.year >= yFrom);
+    }
+  }
+  if (yearTo) {
+    const yTo = Number(yearTo);
+    if (!isNaN(yTo)) {
+      results = results.filter(s => s.year !== undefined && s.year <= yTo);
+    }
+  }
 
   return res.json({
     query,
     normalized: normalizePersian(query),
     totalCount: results.length,
-    sources: results,
+    sources: results.slice(0, 40),
     scores: retrieval.scores
   });
 });
 
 // GET /api/v1/legal/sources
 app.get("/api/v1/legal/sources", (req, res) => {
-  return res.json({ sources: db.legalSources });
+  // همیشه اطمینان حاصل کن که آخرین دادنامه‌های استخراج‌شده اضافه شده‌اند
+  syncAllSourcesIntoDb();
+
+  const { ara_page, category, source_type, search, source_origin, law_type, year, year_from, year_to } = req.query;
+  let result = db.legalSources;
+
+  if (source_origin === "judges" || source_origin === "judges_all") {
+    result = result.filter(s => s.metadata?.judge_id !== undefined);
+  } else if (source_origin === "judges_100_to_1000") {
+    result = result.filter(s => s.metadata?.judge_id !== undefined && Number(s.metadata.judge_id) <= 1000);
+  } else if (source_origin === "judges_1000_to_10000") {
+    result = result.filter(s => s.metadata?.judge_id !== undefined && Number(s.metadata.judge_id) >= 1000);
+  } else if (source_origin === "unity_pages") {
+    result = result.filter(s => s.metadata?.page !== undefined || s.source_type === "UNITY_JUDGMENT");
+  }
+
+  if (ara_page && ara_page !== "all") {
+    const pageNum = parseInt(ara_page as string, 10);
+    if (!isNaN(pageNum)) {
+      result = result.filter(s => s.metadata?.page === pageNum);
+    }
+  }
+
+  if (category && category !== "all") {
+    result = result.filter(s => s.category === category);
+  }
+
+  if (source_type && source_type !== "all") {
+    result = result.filter(s => s.source_type === source_type);
+  }
+
+  if (law_type && law_type !== "all") {
+    result = result.filter(s => classifyLawType(s) === law_type || s.source_type === law_type);
+  }
+
+  if (year && year !== "all") {
+    const targetYear = Number(year);
+    if (!isNaN(targetYear)) {
+      result = result.filter(s => extractSourceYear(s) === targetYear);
+    }
+  }
+
+  if (year_from) {
+    const yFrom = Number(year_from);
+    if (!isNaN(yFrom)) {
+      result = result.filter(s => {
+        const yr = extractSourceYear(s);
+        return yr !== undefined && yr >= yFrom;
+      });
+    }
+  }
+
+  if (year_to) {
+    const yTo = Number(year_to);
+    if (!isNaN(yTo)) {
+      result = result.filter(s => {
+        const yr = extractSourceYear(s);
+        return yr !== undefined && yr <= yTo;
+      });
+    }
+  }
+
+  if (search && typeof search === "string" && search.trim()) {
+    const normalized = normalizePersian(search.trim());
+    result = result.filter(s => {
+      const fullText = normalizePersian(`${s.title} ${s.document_number} ${s.text} ${s.keywords.join(" ")}`);
+      return fullText.includes(normalized);
+    });
+  }
+
+  const seenIds = new Set<string>();
+  const deduplicatedResult = result.filter(s => {
+    if (!s.id || seenIds.has(s.id)) return false;
+    seenIds.add(s.id);
+    return true;
+  }).map(s => ({
+    ...s,
+    year: extractSourceYear(s),
+    law_type: classifyLawType(s)
+  }));
+
+  const araSourcesCount = db.legalSources.filter(s => s.metadata?.source_url?.includes("ara.jri.ac.ir") || s.authority?.includes("سامانه ملی آرای قضایی")).length;
+  const judgesSourcesCount = db.legalSources.filter(s => s.metadata?.judge_id !== undefined).length;
+  const judges100To1000Count = db.legalSources.filter(s => s.metadata?.judge_id !== undefined && Number(s.metadata.judge_id) <= 1000).length;
+  const judges1000To10000Count = db.legalSources.filter(s => s.metadata?.judge_id !== undefined && Number(s.metadata.judge_id) >= 1000).length;
+  const unitySourcesCount = db.legalSources.filter(s => s.metadata?.page !== undefined || s.source_type === "UNITY_JUDGMENT").length;
+
+  return res.json({
+    sources: deduplicatedResult,
+    total: deduplicatedResult.length,
+    totalAraSources: araSourcesCount,
+    totalJudgesSources: judgesSourcesCount,
+    totalJudges100To1000: judges100To1000Count,
+    totalJudges1000To10000: judges1000To10000Count,
+    totalUnitySources: unitySourcesCount,
+    totalPages: 71
+  });
+});
+
+// GET /api/v1/legal/ara-stats
+app.get("/api/v1/legal/ara-stats", (req, res) => {
+  syncAllSourcesIntoDb();
+  const araSources = db.legalSources.filter(s => s.metadata?.source_url?.includes("ara.jri.ac.ir") || s.authority?.includes("سامانه ملی آرای قضایی"));
+  const judgesSources = araSources.filter(s => s.metadata?.judge_id !== undefined);
+  const judges100To1000 = judgesSources.filter(s => Number(s.metadata?.judge_id) <= 1000);
+  const judges1000To10000 = judgesSources.filter(s => Number(s.metadata?.judge_id) >= 1000);
+  const unitySources = araSources.filter(s => s.metadata?.page !== undefined);
+
+  const pageDistribution: Record<number, number> = {};
+  for (let p = 1; p <= 71; p++) {
+    pageDistribution[p] = 0;
+  }
+  for (const s of unitySources) {
+    const p = s.metadata?.page;
+    if (p && typeof p === "number" && p >= 1 && p <= 71) {
+      pageDistribution[p] = (pageDistribution[p] || 0) + 1;
+    }
+  }
+
+  return res.json({
+    success: true,
+    totalSources: araSources.length,
+    totalUnitySources: unitySources.length,
+    totalJudgesSources: judgesSources.length,
+    totalJudges100To1000: judges100To1000.length,
+    totalJudges1000To10000: judges1000To10000.length,
+    totalPages: 71,
+    minPage: 1,
+    maxPage: 71,
+    pageDistribution,
+    samplePages: [1, 5, 15, 30, 45, 60, 71]
+  });
 });
 
 // POST /api/v1/legal/sources (Ingestion Pipeline)
@@ -617,35 +854,115 @@ app.post("/api/v1/legal/sources", (req, res) => {
   return res.json({ source: newSource });
 });
 
-// POST /api/v1/legal/sync-ara-jri (Sync & Ingest from ara.jri.ac.ir Page 5)
-app.post("/api/v1/legal/sync-ara-jri", (req, res) => {
-  const { url } = req.body;
-  const targetUrl = url || "https://ara.jri.ac.ir/Law/Index?layout=True&page=5&Slayout=True";
+// GET /api/v1/legal/sources/:id
+app.get("/api/v1/legal/sources/:id", (req, res) => {
+  syncAllSourcesIntoDb();
+  const { id } = req.params;
+  const source = db.legalSources.find(s => s.id === id);
+  if (!source) {
+    return res.status(404).json({ error: "مستند قانونی مورد نظر یافت نشد." });
+  }
+  return res.json({ source });
+});
+
+// POST /api/v1/legal/sources/:id/analyze (AI Precedent & Law Deep Analysis)
+app.post("/api/v1/legal/sources/:id/analyze", async (req, res) => {
+  syncAllSourcesIntoDb();
+  const { id } = req.params;
+  const source = db.legalSources.find(s => s.id === id);
+  if (!source) {
+    return res.status(404).json({ error: "مستند قانونی مورد نظر یافت نشد." });
+  }
+
+  // If already analyzed and cached, return it directly unless forced
+  const forceRefresh = req.body?.force === true;
+  if (!forceRefresh && source.metadata?.ai_analysis) {
+    return res.json({
+      success: true,
+      analysis: source.metadata.ai_analysis,
+      source,
+      cached: true
+    });
+  }
+
+  try {
+    const analysis = await generatePrecedentAnalysis(source);
+    if (!source.metadata) source.metadata = {};
+    source.metadata.ai_analysis = analysis;
+
+    return res.json({
+      success: true,
+      analysis,
+      source,
+      cached: false
+    });
+  } catch (err: any) {
+    console.error("Legal precedent analysis error:", err);
+    return res.status(500).json({ error: "خطا در تحلیل هوشمند مستند قانونی: " + err.message });
+  }
+});
+
+// POST /api/v1/legal/sync-ara-jri (Sync & Ingest from ara.jri.ac.ir Pages 1 to 71)
+app.post("/api/v1/legal/sync-ara-jri", async (req, res) => {
+  const { url, page, startPage, endPage, live } = req.body;
+  
+  let targetPages: number[] = [];
+  if (startPage && endPage) {
+    const s = Math.max(1, Math.min(71, parseInt(startPage, 10)));
+    const e = Math.max(s, Math.min(71, parseInt(endPage, 10)));
+    for (let p = s; p <= e; p++) targetPages.push(p);
+  } else if (page) {
+    targetPages.push(Math.max(1, Math.min(71, parseInt(page, 10))));
+  } else if (url && url.includes("page=")) {
+    const m = url.match(/page=(\d+)/);
+    targetPages.push(m ? parseInt(m[1], 10) : 5);
+  } else {
+    // پیش‌فرض: بارگذاری همه صفحات ۱ تا ۷۱
+    for (let p = 1; p <= 71; p++) targetPages.push(p);
+  }
 
   let addedCount = 0;
-  for (const src of ARA_JRI_LEGAL_SOURCES) {
-    const exists = db.legalSources.some(s => s.id === src.id || (s.document_number === src.document_number && s.category === "آرای وحدت رویه"));
-    if (!exists) {
-      db.legalSources.unshift({
-        ...src,
-        metadata: {
-          ...src.metadata,
-          source_url: targetUrl
+  const existingSet = new Set(db.legalSources.map(s => s.id));
+
+  // اگر حالت live فعال باشد، برای صفحه مشخص اقدام به کراول زنده می‌کند
+  if (live && targetPages.length === 1) {
+    try {
+      const liveItems = await crawlAraJriPage(targetPages[0]);
+      for (const item of liveItems) {
+        if (!existingSet.has(item.id)) {
+          db.legalSources.unshift(item);
+          existingSet.add(item.id);
+          addedCount++;
         }
-      });
+      }
+    } catch (err) {
+      console.warn("Live crawl fallback to pre-compiled dataset:", err);
+    }
+  }
+
+  // ادغام از آرشیو جامع صفحات انتخاب شده
+  for (const src of ARA_JRI_LEGAL_SOURCES) {
+    const itemPage = src.metadata?.page || 1;
+    if (targetPages.includes(itemPage) && !existingSet.has(src.id)) {
+      db.legalSources.unshift(src);
+      existingSet.add(src.id);
       addedCount++;
     }
   }
 
   const araSources = db.legalSources.filter(s => s.metadata?.source_url?.includes("ara.jri.ac.ir") || s.authority?.includes("سامانه ملی آرای قضایی"));
+  const pageRangeStr = targetPages.length === 71 
+    ? "کلیه صفحات ۱ تا ۷۱" 
+    : (targetPages.length === 1 ? `صفحه ${targetPages[0]}` : `صفحات ${Math.min(...targetPages)} تا ${Math.max(...targetPages)}`);
 
   return res.json({
     success: true,
-    message: `تعداد ${ARA_JRI_LEGAL_SOURCES.length} رأی وحدت رویه از سامانه ملی آرای قضایی (صفحه ۵) با موفقیت در پایگاه دانش و وکتور RAG بارگذاری و همگام گردید.`,
-    url: targetUrl,
+    message: `مستندات و آرای سامانه ملی قضایی (${pageRangeStr}) شامل ${araSources.length} منبع در پایگاه دانش و وکتور RAG بارگذاری گردید. (${addedCount} رکورد جدید اضافه شد)`,
+    url: url || `https://ara.jri.ac.ir/Law/Index?layout=True&page=${targetPages[0] || 5}&Slayout=True`,
+    pagesSynced: targetPages,
     addedCount,
     totalAraSources: araSources.length,
-    sources: araSources
+    sources: araSources.slice(0, 100)
   });
 });
 
